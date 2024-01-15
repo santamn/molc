@@ -9,6 +9,10 @@ macro_rules! regex {
     }};
 }
 
+pub fn read_str(input: &str) -> Result<Ast, ParseError> {
+    read_form(&mut tokenize(input).peekable())
+}
+
 mod special_string {
     pub struct MaybeUncloedString(String);
 
@@ -112,7 +116,7 @@ enum MacroChar {
     Meta,            // ^
 }
 
-fn tokenize<I>(input: &str) -> impl Iterator<Item = Token> + '_ {
+fn tokenize(input: &str) -> impl Iterator<Item = Token> + '_ {
     regex!(r#"[\s,]*(;.*|~@|[\[\]{}()'`~^@]|"(?:\\.|[^\\"])*"?|[^\s\[\]{}()'"`,;]*)"#)
         .captures_iter(input)
         // cap[0]:マッチした文字列全体, cap[1]:グループ化した文字列=空白以外の部分
@@ -173,7 +177,7 @@ fn token(s: &str) -> Token {
 pub struct Symbol(String);
 
 #[derive(Debug)]
-enum Ast {
+pub enum Ast {
     Nil,
     Bool(bool),
     Num(i64),
@@ -187,7 +191,7 @@ enum Ast {
 }
 
 #[derive(Debug)]
-enum SpecialForms {
+pub enum SpecialForms {
     Def(Symbol, Ast),
     Do(Vec<Ast>),
     If(Ast, Ast, Ast),
@@ -196,14 +200,15 @@ enum SpecialForms {
 }
 
 #[derive(Debug, Clone)]
-enum ParseError {
+pub enum ParseError {
     UnexpectedEOF,
     Unclosed(Enclosure),
     Def(String),
+    If(String),
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Enclosure {
+pub enum Enclosure {
     Paren,         // ()
     SquareBracket, // []
     CurlyBracket,  // {}
@@ -302,21 +307,42 @@ where
                 "First argument to def must be a Symbol".to_string(),
             ))
         }
-        None => return Err(ParseError::Def("too few arguments to def".to_string())),
+        None => return Err(ParseError::Def("Too few arguments to def".to_string())),
     };
 
-    // TODO: 二引数目のエラー処理
-    Ok(SpecialForms::Def(Symbol(sym), read_form(tokens)?))
+    Ok(SpecialForms::Def(
+        Symbol(sym),
+        match read_form(tokens) {
+            Ok(ast) => ast,
+            Err(ParseError::UnexpectedEOF) => {
+                return Err(ParseError::Def("Too few arguments to def".to_string()))
+            }
+            Err(e) => return Err(e),
+        },
+    ))
 }
 
-// TODO
 fn read_if<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
-    let cond = read_form(tokens)?;
-    let then = read_form(tokens)?;
-    let els = read_form(tokens)?;
+    let err = Err(ParseError::If("Too few arguments to if".to_string()));
+    let cond = match read_form(tokens) {
+        Ok(ast) => ast,
+        Err(ParseError::UnexpectedEOF) => return err,
+        Err(e) => return Err(e),
+    };
+    let then = match read_form(tokens) {
+        Ok(ast) => ast,
+        Err(ParseError::UnexpectedEOF) => return err,
+        Err(e) => return Err(e),
+    };
+    let els = match read_form(tokens) {
+        Ok(ast) => ast,
+        Err(ParseError::UnexpectedEOF) => Ast::Nil,
+        Err(e) => return Err(e),
+    };
+
     Ok(SpecialForms::If(cond, then, els))
 }
 
