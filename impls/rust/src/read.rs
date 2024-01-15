@@ -199,12 +199,11 @@ pub enum SpecialForms {
     Fn(Vec<Symbol>, Option<Symbol>, Ast),
 }
 
-#[derive(Debug, Clone)]
 pub enum ParseError {
     UnexpectedEOF,
     Unclosed(Enclosure),
-    Def(String),
-    If(String),
+    Def(DefError),
+    IfTooFewArgs,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -223,6 +222,12 @@ impl From<Kind> for Enclosure {
             Kind::Curly => Enclosure::CurlyBracket,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DefError {
+    TooFewArgs,
+    FirstArgMustBeSymbol,
 }
 
 fn read_form<I>(tokens: &mut Peekable<I>) -> Result<Ast, ParseError>
@@ -302,21 +307,15 @@ where
 {
     let sym = match tokens.next() {
         Some(Token::SYM(s)) => s,
-        Some(_) => {
-            return Err(ParseError::Def(
-                "First argument to def must be a Symbol".to_string(),
-            ))
-        }
-        None => return Err(ParseError::Def("Too few arguments to def".to_string())),
+        Some(_) => return Err(ParseError::Def(DefError::FirstArgMustBeSymbol)),
+        None => return Err(ParseError::Def(DefError::TooFewArgs)),
     };
 
     Ok(SpecialForms::Def(
         Symbol(sym),
         match read_form(tokens) {
             Ok(ast) => ast,
-            Err(ParseError::UnexpectedEOF) => {
-                return Err(ParseError::Def("Too few arguments to def".to_string()))
-            }
+            Err(ParseError::UnexpectedEOF) => return Err(ParseError::Def(DefError::TooFewArgs)),
             Err(e) => return Err(e),
         },
     ))
@@ -326,15 +325,14 @@ fn read_if<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
-    let err = Err(ParseError::If("Too few arguments to if".to_string()));
     let cond = match read_form(tokens) {
         Ok(ast) => ast,
-        Err(ParseError::UnexpectedEOF) => return err,
+        Err(ParseError::UnexpectedEOF) => return Err(ParseError::IfTooFewArgs),
         Err(e) => return Err(e),
     };
     let then = match read_form(tokens) {
         Ok(ast) => ast,
-        Err(ParseError::UnexpectedEOF) => return err,
+        Err(ParseError::UnexpectedEOF) => return Err(ParseError::IfTooFewArgs),
         Err(e) => return Err(e),
     };
     let els = match read_form(tokens) {
@@ -346,74 +344,17 @@ where
     Ok(SpecialForms::If(cond, then, els))
 }
 
-// TODO
-fn read_let<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
+fn read_let<I>(_tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
-    let mut bindings = Vec::new();
-    loop {
-        match tokens.peek() {
-            Some(Token::BRACKET(Kind::Paren, State::Close)) => {
-                tokens.next();
-                break;
-            }
-            Some(_) => {
-                let sym = match tokens.next() {
-                    Some(Token::SYM(s)) => s,
-                    Some(_) => {
-                        return Err(ParseError::Def(
-                            "First argument to def must be a Symbol".to_string(),
-                        ))
-                    }
-                    None => return Err(ParseError::Def("too few arguments to def".to_string())),
-                };
-                let ast = read_form(tokens)?;
-                bindings.push((Symbol(sym), ast));
-            }
-            None => return Err(ParseError::Unclosed(Enclosure::Paren)),
-        }
-    }
-    let body = read_form(tokens)?;
-    Ok(SpecialForms::Let(bindings, body))
+    todo!()
 }
 
 // TODO
-fn read_fn<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
+fn read_fn<I>(_tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
-    let mut params = Vec::new();
-    loop {
-        match tokens.peek() {
-            Some(Token::BRACKET(_, State::Close)) => {
-                tokens.next();
-                break;
-            }
-            Some(_) => {
-                let sym = match tokens.next() {
-                    Some(Token::SYM(s)) => s,
-                    Some(_) => {
-                        return Err(ParseError::Def(
-                            "First argument to def must be a Symbol".to_string(),
-                        ))
-                    }
-                    None => return Err(ParseError::Def("too few arguments to def".to_string())),
-                };
-                params.push(Symbol(sym));
-            }
-            None => return Err(ParseError::Unclosed(Enclosure::Paren)),
-        }
-    }
-    let rest = match tokens.next() {
-        Some(Token::SYM(s)) => Some(Symbol(s)),
-        Some(_) => {
-            return Err(ParseError::Def(
-                "First argument to def must be a Symbol".to_string(),
-            ))
-        }
-        None => None,
-    };
-    let body = read_form(tokens)?;
-    Ok(SpecialForms::Fn(params, rest, body))
+    todo!()
 }
