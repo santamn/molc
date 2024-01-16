@@ -10,67 +10,19 @@ macro_rules! regex {
 }
 
 pub fn read_str(input: &str) -> Result<Ast, ParseError> {
-    read_form(&mut tokenize(input).peekable())
+    read_form(&mut lexer(input).peekable())
 }
 
-mod special_string {
-    pub struct MaybeUncloedString(String);
-
-    impl MaybeUncloedString {
-        #[inline]
-        pub fn new(s: String) -> Self {
-            Self(s)
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct EscapedString(String);
-
-    impl TryFrom<MaybeUncloedString> for EscapedString {
-        type Error = ();
-
-        fn try_from(value: MaybeUncloedString) -> Result<Self, Self::Error> {
-            let v = value.0;
-            // クオートであるべき場所をスキップ
-            let (s, is_end_escaped) = v[1..v.len() - 1].chars().fold(
-                (String::with_capacity(v.len() - 2), false),
-                |(mut s, escaped), c| {
-                    if escaped {
-                        s.push(match c {
-                            'n' => '\n',
-                            't' => '\t',
-                            'r' => '\r',
-                            _ => c,
-                        });
-                        (s, false)
-                    } else if c == '\\' {
-                        (s, true)
-                    } else {
-                        s.push(c);
-                        (s, false)
-                    }
-                },
-            );
-
-            if !is_end_escaped && v.ends_with('"') {
-                Ok(Self(s))
-            } else {
-                Err(())
-            }
-        }
-    }
-}
-
-// 8888888 8888888888 ,o888888o.     8 8888     ,88' 8 8888888888   b.             8  8 8888  8888888888',8888' 8 8888888888   8 888888888o.
-//       8 8888    . 8888     `88.   8 8888    ,88'  8 8888         888o.          8  8 8888         ,8',8888'  8 8888         8 8888    `88.
-//       8 8888   ,8 8888       `8b  8 8888   ,88'   8 8888         Y88888o.       8  8 8888        ,8',8888'   8 8888         8 8888     `88
-//       8 8888   88 8888        `8b 8 8888  ,88'    8 8888         .`Y888888o.    8  8 8888       ,8',8888'    8 8888         8 8888     ,88
-//       8 8888   88 8888         88 8 8888 ,88'     8 888888888888 8o. `Y888888o. 8  8 8888      ,8',8888'     8 888888888888 8 8888.   ,88'
-//       8 8888   88 8888         88 8 8888 88'      8 8888         8`Y8o. `Y88888o8  8 8888     ,8',8888'      8 8888         8 888888888P'
-//       8 8888   88 8888        ,8P 8 888888<       8 8888         8   `Y8o. `Y8888  8 8888    ,8',8888'       8 8888         8 8888`8b
-//       8 8888   `8 8888       ,8P  8 8888 `Y8.     8 8888         8      `Y8o. `Y8  8 8888   ,8',8888'        8 8888         8 8888 `8b.
-//       8 8888    ` 8888     ,88'   8 8888   `Y8.   8 8888         8         `Y8o.`  8 8888  ,8',8888'         8 8888         8 8888   `8b.
-//       8 8888       `8888888P'     8 8888     `Y8. 8 888888888888 8            `Yo  8 8888 ,8',8888888888888  8 888888888888 8 8888     `88.
+// 8 8888         8 8888888888   `8.`8888.      ,8' 8 8888888888   8 888888888o.
+// 8 8888         8 8888          `8.`8888.    ,8'  8 8888         8 8888    `88.
+// 8 8888         8 8888           `8.`8888.  ,8'   8 8888         8 8888     `88
+// 8 8888         8 8888            `8.`8888.,8'    8 8888         8 8888     ,88
+// 8 8888         8 888888888888     `8.`88888'     8 888888888888 8 8888.   ,88'
+// 8 8888         8 8888             .88.`8888.     8 8888         8 888888888P'
+// 8 8888         8 8888            .8'`8.`8888.    8 8888         8 8888`8b
+// 8 8888         8 8888           .8'  `8.`8888.   8 8888         8 8888 `8b.
+// 8 8888         8 8888          .8'    `8.`8888.  8 8888         8 8888   `8b.
+// 8 888888888888 8 888888888888 .8'      `8.`8888. 8 888888888888 8 8888     `88.
 
 #[allow(non_camel_case_types)]
 enum Token {
@@ -116,16 +68,16 @@ enum MacroChar {
     Meta,            // ^
 }
 
-fn tokenize(input: &str) -> impl Iterator<Item = Token> + '_ {
+fn lexer(input: &str) -> impl Iterator<Item = Token> + '_ {
     regex!(r#"[\s,]*(;.*|~@|[\[\]{}()'`~^@]|"(?:\\.|[^\\"])*"?|[^\s\[\]{}()'"`,;]*)"#)
         .captures_iter(input)
         // cap[0]:マッチした文字列全体, cap[1]:グループ化した文字列=空白以外の部分
         .map(|cap| unsafe { cap.get(1).unwrap_unchecked() }.as_str())
         .filter(|token| !token.starts_with(';')) // コメント行を除外
-        .map(|t| token(t))
+        .map(|t| tokenizer(t))
 }
 
-fn token(s: &str) -> Token {
+fn tokenizer(s: &str) -> Token {
     match s {
         "nil" => Token::NIL,
         "true" => Token::BOOL(true),
@@ -174,9 +126,6 @@ fn token(s: &str) -> Token {
 // 8 8888   .8'       `8. `88888. 8 8888     `88. `Y8888P ,88P' 8 888888888888 8 8888     `88.
 
 #[derive(Debug)]
-pub struct Symbol(String);
-
-#[derive(Debug)]
 pub enum Ast {
     Nil,
     Bool(bool),
@@ -189,6 +138,9 @@ pub enum Ast {
     Map(Vec<(Ast, Ast)>),
     SpecialForm(Box<SpecialForms>),
 }
+
+#[derive(Debug)]
+pub struct Symbol(String);
 
 #[derive(Debug)]
 pub enum SpecialForms {
@@ -351,10 +303,57 @@ where
     todo!()
 }
 
-// TODO
 fn read_fn<I>(_tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
     todo!()
+}
+
+mod special_string {
+    pub struct MaybeUncloedString(String);
+
+    impl MaybeUncloedString {
+        #[inline]
+        pub fn new(s: String) -> Self {
+            Self(s)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct EscapedString(String);
+
+    impl TryFrom<MaybeUncloedString> for EscapedString {
+        type Error = ();
+
+        fn try_from(value: MaybeUncloedString) -> Result<Self, Self::Error> {
+            let v = value.0;
+            // クオートであるべき場所をスキップ
+            let (s, is_end_escaped) = v[1..v.len() - 1].chars().fold(
+                (String::with_capacity(v.len() - 2), false),
+                |(mut s, escaped), c| {
+                    if escaped {
+                        s.push(match c {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            _ => c,
+                        });
+                        (s, false)
+                    } else if c == '\\' {
+                        (s, true)
+                    } else {
+                        s.push(c);
+                        (s, false)
+                    }
+                },
+            );
+
+            if !is_end_escaped && v.ends_with('"') {
+                Ok(Self(s))
+            } else {
+                Err(())
+            }
+        }
+    }
 }
