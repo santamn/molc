@@ -34,7 +34,7 @@ enum Token {
     KEYWORD(String),
     SPECIAL(Specials),
     BRACKET(Kind, State),
-    MACRO(MacroChar),
+    MACRO(MacroChars),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +58,7 @@ enum Specials {
     FN,
 }
 
-enum MacroChar {
+enum MacroChars {
     Quote,           // '
     Quasiquote,      // `
     Unquote,         // ~
@@ -93,13 +93,13 @@ fn tokenizer(s: &str) -> Token {
         "]" => Token::BRACKET(Kind::Square, State::Close),
         "{" => Token::BRACKET(Kind::Curly, State::Open),
         "}" => Token::BRACKET(Kind::Curly, State::Close),
-        "'" => Token::MACRO(MacroChar::Quote),
-        "`" => Token::MACRO(MacroChar::Quasiquote),
-        "~" => Token::MACRO(MacroChar::Unquote),
-        "~@" => Token::MACRO(MacroChar::UnquoteSplicing),
-        "@" => Token::MACRO(MacroChar::Deref),
-        "#" => Token::MACRO(MacroChar::Dispatch),
-        "^" => Token::MACRO(MacroChar::Meta),
+        "'" => Token::MACRO(MacroChars::Quote),
+        "`" => Token::MACRO(MacroChars::Quasiquote),
+        "~" => Token::MACRO(MacroChars::Unquote),
+        "~@" => Token::MACRO(MacroChars::UnquoteSplicing),
+        "@" => Token::MACRO(MacroChars::Deref),
+        "#" => Token::MACRO(MacroChars::Dispatch),
+        "^" => Token::MACRO(MacroChars::Meta),
         _ => {
             if let Ok(n) = s.parse::<i64>() {
                 Token::NUM(n)
@@ -223,7 +223,7 @@ where
                 tokens.next();
                 return Ok(seq);
             }
-            Some(_) => seq.push(read_form(tokens)?),
+            Some(_) => seq.push(read_form(tokens)?), // Q. ここでUnexpectedEOFになったらどうする？ A. ならない
             None => return Err(ParseError::Unclosed(kind.into())),
         }
     }
