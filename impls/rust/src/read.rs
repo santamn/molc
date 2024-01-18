@@ -126,7 +126,7 @@ fn tokenizer(s: &str) -> Token {
 // 8 8888    .888888888. `88888.  8 8888   `8b.  `8b.  ;8.`8888 8 8888         8 8888   `8b.
 // 8 8888   .8'       `8. `88888. 8 8888     `88. `Y8888P ,88P' 8 888888888888 8 8888     `88.
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Ast {
     Nil,
     Bool(bool),
@@ -140,10 +140,10 @@ pub enum Ast {
     SpecialForm(Box<SpecialForms>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol(String);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SpecialForms {
     Def(Symbol, Ast),
     Do(Vec<Ast>),
@@ -155,6 +155,7 @@ pub enum SpecialForms {
 pub enum ParseError {
     UnexpectedEOF,
     Unclosed(Enclosure),
+    OddNumberOfMap,
     Def(DefError),
     IfTooFewArgs,
 }
@@ -207,7 +208,30 @@ where
         Token::BRACKET(Kind::Square, State::Open) => {
             read_seq(tokens, Kind::Square).map(Ast::Vector)
         }
-        // Token::CURLY(Bracket::Open) => read_map(rest).map(Ast::Map),
+        Token::BRACKET(Kind::Curly, State::Open) => {
+            let mut m = Vec::new();
+            loop {
+                match tokens.peek() {
+                    Some(&Token::BRACKET(Kind::Curly, State::Close)) => {
+                        tokens.next();
+                        return Ok(Ast::Map(m));
+                    }
+                    Some(_) => {
+                        m.push((
+                            read_form(tokens)?,
+                            match read_form(tokens) {
+                                Ok(ast) => ast,
+                                Err(ParseError::UnexpectedEOF) => {
+                                    return Err(ParseError::OddNumberOfMap)
+                                }
+                                Err(e) => return Err(e),
+                            },
+                        ));
+                    }
+                    None => return Err(ParseError::Unclosed(Enclosure::CurlyBracket)),
+                }
+            }
+        }
         // Token::MACRO(c) => read_macro(c, rest),
         _ => todo!(),
     }
@@ -321,7 +345,7 @@ mod special_string {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct EscapedString(String);
 
     impl TryFrom<MaybeUncloedString> for EscapedString {
