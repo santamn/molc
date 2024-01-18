@@ -24,7 +24,7 @@ pub fn read_str(input: &str) -> Result<Ast, ParseError> {
 // 8 8888         8 8888          .8'    `8.`8888.  8 8888         8 8888   `8b.
 // 8 888888888888 8 888888888888 .8'      `8.`8888. 8 888888888888 8 8888     `88.
 
-#[allow(non_camel_case_types)]
+#[allow(clippy::upper_case_acronyms)]
 enum Token {
     NIL,
     BOOL(bool),
@@ -50,6 +50,7 @@ enum State {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::upper_case_acronyms)]
 enum Specials {
     DEF,
     DO,
@@ -74,7 +75,7 @@ fn lexer(input: &str) -> impl Iterator<Item = Token> + '_ {
         // cap[0]:マッチした文字列全体, cap[1]:グループ化した文字列=空白以外の部分
         .map(|cap| unsafe { cap.get(1).unwrap_unchecked() }.as_str())
         .filter(|token| !token.starts_with(';')) // コメント行を除外
-        .map(|t| tokenizer(t))
+        .map(tokenizer)
 }
 
 fn tokenizer(s: &str) -> Token {
@@ -103,10 +104,10 @@ fn tokenizer(s: &str) -> Token {
         _ => {
             if let Ok(n) = s.parse::<i64>() {
                 Token::NUM(n)
-            } else if s.starts_with('"') {
-                Token::STR(MaybeUncloedString::new(s.to_string()))
-            } else if s.starts_with(':') {
-                Token::KEYWORD(s[1..].to_string())
+            } else if let Some(str) = s.strip_prefix('"') {
+                Token::STR(MaybeUncloedString::new(str.to_string()))
+            } else if let Some(keyword) = s.strip_prefix(':') {
+                Token::KEYWORD(keyword.to_string())
             } else {
                 Token::SYM(s.to_string())
             }
@@ -327,10 +328,9 @@ mod special_string {
         type Error = ();
 
         fn try_from(value: MaybeUncloedString) -> Result<Self, Self::Error> {
-            let v = value.0;
-            // クオートであるべき場所をスキップ
-            let (s, is_end_escaped) = v[1..v.len() - 1].chars().fold(
-                (String::with_capacity(v.len() - 2), false),
+            let v = value.0.strip_suffix('"').ok_or(())?;
+            let (s, is_end_escaped) = v.chars().fold(
+                (String::with_capacity(v.len()), false),
                 |(mut s, escaped), c| {
                     if escaped {
                         s.push(match c {
@@ -349,7 +349,7 @@ mod special_string {
                 },
             );
 
-            if !is_end_escaped && v.ends_with('"') {
+            if !is_end_escaped {
                 Ok(Self(s))
             } else {
                 Err(())
