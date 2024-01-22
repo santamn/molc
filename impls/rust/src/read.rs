@@ -232,8 +232,9 @@ where
                 }
             }
         }
-        // Token::MACRO(c) => read_macro(c, rest),
-        _ => todo!(),
+        Token::MACRO(_c) => todo!("impl read_macro"),
+        Token::SPECIAL(_) => todo!("エラー処理"),
+        Token::BRACKET(_k, State::Close) => todo!("エラー処理"),
     }
 }
 
