@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::hint::unreachable_unchecked;
 use std::iter::Peekable;
 
 use self::special_string::*;
@@ -51,7 +53,7 @@ enum State {
 
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
-enum Specials {
+pub enum Specials {
     DEF,
     DO,
     IF,
@@ -157,8 +159,9 @@ pub enum ParseError {
     Unclosed(Enclosure),
     UnbalancedPair,
     OddNumberOfMap,
-    Def(DefError),
-    IfTooFewArgs,
+    TooManyArgs(Specials),
+    TooFewArgs(Specials),
+    NotSymbol(WhatMustBeSymbol),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,10 +182,10 @@ impl From<Kind> for Enclosure {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DefError {
-    TooFewArgs,
-    FirstArgMustBeSymbol,
+pub enum WhatMustBeSymbol {
+    DefFirstArg,
+    LetBindingForm,
+    FnParams,
 }
 
 fn read_form<I>(tokens: &mut Peekable<I>) -> Result<Ast, ParseError>
@@ -249,10 +252,13 @@ where
             Some(_) => {
                 seq.push((
                     read_form(tokens)?,
-                    read_form(tokens).map_err(|e| match e {
-                        ParseError::UnexpectedEOF => ParseError::UnbalancedPair,
-                        _ => e,
-                    })?,
+                    match tokens.peek() {
+                        Some(&Token::BRACKET(k, State::Close)) if k == kind => {
+                            return Err(ParseError::UnbalancedPair);
+                        }
+                        Some(_) => read_form(tokens)?,
+                        None => return Err(ParseError::Unclosed(kind.into())),
+                    },
                 ));
             }
             None => return Err(ParseError::Unclosed(kind.into())),
@@ -260,85 +266,47 @@ where
     }
 }
 
-fn read_special_form<I>(
-    atom: Specials,
-    tokens: &mut Peekable<I>,
-) -> Result<SpecialForms, ParseError>
+// TODO: 特殊形式はそもそもカッコが閉じていることを確認してから処理を行いたい
+
+fn read_special_form<I>(s: Specials, tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
 where
     I: Iterator<Item = Token>,
 {
-    tokens.next(); // skip atom
-    let f = match atom {
-        Specials::DEF => read_def(tokens),
-        // read_seqで")"を処理するためreturn
-        Specials::DO => return read_seq(tokens, Kind::Paren).map(SpecialForms::Do),
-        Specials::IF => read_if(tokens),
-        Specials::LET => read_let(tokens),
-        Specials::FN => read_fn(tokens),
-    }?;
-
-    if let Some(Token::BRACKET(Kind::Paren, State::Close)) = tokens.next() {
-        Ok(f)
-    } else {
-        Err(ParseError::Unclosed(Enclosure::Paren))
-    }
-}
-
-fn read_def<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
-where
-    I: Iterator<Item = Token>,
-{
-    let sym = match tokens.next() {
-        Some(Token::SYM(s)) => s,
-        Some(_) => return Err(ParseError::Def(DefError::FirstArgMustBeSymbol)),
-        None => return Err(ParseError::Def(DefError::TooFewArgs)),
-    };
-
-    Ok(SpecialForms::Def(
-        Symbol(sym),
-        match read_form(tokens) {
-            Ok(ast) => ast,
-            Err(ParseError::UnexpectedEOF) => return Err(ParseError::Def(DefError::TooFewArgs)),
-            Err(e) => return Err(e),
-        },
-    ))
-}
-
-fn read_if<I>(tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
-where
-    I: Iterator<Item = Token>,
-{
-    let cond = match read_form(tokens) {
-        Ok(ast) => ast,
-        Err(ParseError::UnexpectedEOF) => return Err(ParseError::IfTooFewArgs),
-        Err(e) => return Err(e),
-    };
-    let then = match read_form(tokens) {
-        Ok(ast) => ast,
-        Err(ParseError::UnexpectedEOF) => return Err(ParseError::IfTooFewArgs),
-        Err(e) => return Err(e),
-    };
-    let els = match read_form(tokens) {
-        Ok(ast) => ast,
-        Err(ParseError::UnexpectedEOF) => Ast::Nil,
-        Err(e) => return Err(e),
-    };
-
-    Ok(SpecialForms::If(cond, then, els))
-}
-
-fn read_let<I>(_tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
-where
-    I: Iterator<Item = Token>,
-{
-    todo!()
-}
-
-fn read_fn<I>(_tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
-where
-    I: Iterator<Item = Token>,
-{
-    todo!()
+    tokens.next(); // consume special token
+    Ok(match s {
+        Specials::DEF => {
+            let v = read_seq(tokens, Kind::Paren)?;
+            match v.len().cmp(&2) {
+                Ordering::Less => return Err(ParseError::TooFewArgs(Specials::DEF)),
+                Ordering::Greater => return Err(ParseError::TooManyArgs(Specials::DEF)),
+                Ordering::Equal => {
+                    let [sym, ast] = unsafe { v.try_into().unwrap_unchecked() };
+                    SpecialForms::Def(
+                        if let Ast::Sym(s) = sym {
+                            s
+                        } else {
+                            return Err(ParseError::NotSymbol(WhatMustBeSymbol::DefFirstArg));
+                        },
+                        ast,
+                    )
+                }
+            }
+        }
+        Specials::DO => SpecialForms::Do(read_seq(tokens, Kind::Paren)?),
+        Specials::IF => {
+            let v = read_seq(tokens, Kind::Paren)?;
+            match v.len().cmp(&3) {
+                Ordering::Less => return Err(ParseError::TooFewArgs(Specials::IF)),
+                Ordering::Greater => return Err(ParseError::TooManyArgs(Specials::IF)),
+                Ordering::Equal => {
+                    let [cond, then, else_] = unsafe { v.try_into().unwrap_unchecked() };
+                    SpecialForms::If(cond, then, else_)
+                }
+            }
+        }
+        Specials::LET => todo!(),
+        Specials::FN => todo!(),
+    })
 }
 
 mod special_string {
