@@ -150,7 +150,7 @@ pub struct Symbol(String);
 
 impl Symbol {
     #[inline]
-    pub fn as_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -225,7 +225,6 @@ where
             if let Some(&Token::SPECIAL(s)) = tokens.peek() {
                 Ok(Ast::SpecialForm(Box::new(read_special_form(tokens, s)?)))
             } else {
-                // TODO: 先頭がsymbolでない場合はエラーにする？
                 read_seq(tokens, Kind::Paren).map(Ast::List)
             }
         }
