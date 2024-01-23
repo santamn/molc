@@ -1,8 +1,11 @@
 use std::cmp::Ordering;
-use std::hint::unreachable_unchecked;
 use std::iter::Peekable;
 
 use self::special_string::*;
+
+// Note
+//  - token列を読む関数はread, astを加工する関数はparseから始まる
+//  - 基本的にdelimiterの開始側を消費するのは呼び出し元の責任、終了側は呼び出し先の責任
 
 macro_rules! regex {
     ($re:literal $(,)?) => {{
@@ -11,7 +14,7 @@ macro_rules! regex {
     }};
 }
 
-pub fn read_str(input: &str) -> Result<Ast, ParseError> {
+pub fn read_str(input: &str) -> Result<Ast, SyntaxError> {
     read_form(&mut lexer(input).peekable())
 }
 
@@ -40,7 +43,7 @@ enum Token {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub enum Kind {
     Paren,  // ()
     Square, // []
     Curly,  // {}
@@ -145,6 +148,13 @@ pub enum Ast {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol(String);
 
+impl Symbol {
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SpecialForms {
     Def(Symbol, Ast),
@@ -154,14 +164,18 @@ pub enum SpecialForms {
     Fn(Vec<Symbol>, Option<Symbol>, Ast),
 }
 
-pub enum ParseError {
+pub enum SyntaxError {
     UnexpectedEOF,
+    UnexpectedDelimiter(Kind),
+    UnexpectedSpecial(Specials),
     Unclosed(Enclosure),
-    UnbalancedPair,
     OddNumberOfMap,
-    TooManyArgs(Specials),
+    OddNumberBindings,
     TooFewArgs(Specials),
-    NotSymbol(WhatMustBeSymbol),
+    TooManyArgs(Specials),
+    NotSymbol(MustBeSymbol),
+    NotVector(MustBeVector),
+    MisplacedAmpersand,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,46 +196,50 @@ impl From<Kind> for Enclosure {
     }
 }
 
-pub enum WhatMustBeSymbol {
+pub enum MustBeSymbol {
     DefFirstArg,
-    LetBindingForm,
+    LetBoundVar,
     FnParams,
 }
 
-fn read_form<I>(tokens: &mut Peekable<I>) -> Result<Ast, ParseError>
+pub enum MustBeVector {
+    LetBindings,
+    FnParams,
+}
+
+fn read_form<I>(tokens: &mut Peekable<I>) -> Result<Ast, SyntaxError>
 where
     I: Iterator<Item = Token>,
 {
-    match tokens.next().ok_or(ParseError::UnexpectedEOF)? {
+    match tokens.next().ok_or(SyntaxError::UnexpectedEOF)? {
         Token::NIL => Ok(Ast::Nil),
         Token::BOOL(b) => Ok(Ast::Bool(b)),
         Token::NUM(n) => Ok(Ast::Num(n)),
         Token::STR(s) => Ok(Ast::Str(
             s.try_into()
-                .map_err(|_| ParseError::Unclosed(Enclosure::Quote))?,
+                .map_err(|_| SyntaxError::Unclosed(Enclosure::Quote))?,
         )),
         Token::SYM(s) => Ok(Ast::Sym(Symbol(s))),
         Token::KEYWORD(s) => Ok(Ast::Keyword(s)),
         Token::BRACKET(Kind::Paren, State::Open) => {
             if let Some(&Token::SPECIAL(s)) = tokens.peek() {
-                Ok(Ast::SpecialForm(Box::new(read_special_form(s, tokens)?)))
+                Ok(Ast::SpecialForm(Box::new(read_special_form(tokens, s)?)))
             } else {
+                // TODO: 先頭がsymbolでない場合はエラーにする？
                 read_seq(tokens, Kind::Paren).map(Ast::List)
             }
         }
         Token::BRACKET(Kind::Square, State::Open) => {
             read_seq(tokens, Kind::Square).map(Ast::Vector)
         }
-        Token::BRACKET(Kind::Curly, State::Open) => {
-            read_pair_seq(tokens, Kind::Curly).map(Ast::Map)
-        }
+        Token::BRACKET(Kind::Curly, State::Open) => read_map(tokens).map(Ast::Map),
         Token::MACRO(_c) => todo!("impl read_macro"),
-        Token::SPECIAL(_) => todo!("エラー処理"),
-        Token::BRACKET(_k, State::Close) => todo!("エラー処理"),
+        Token::SPECIAL(s) => Err(SyntaxError::UnexpectedSpecial(s)),
+        Token::BRACKET(k, State::Close) => Err(SyntaxError::UnexpectedDelimiter(k)),
     }
 }
 
-fn read_seq<I>(tokens: &mut Peekable<I>, kind: Kind) -> Result<Vec<Ast>, ParseError>
+fn read_seq<I>(tokens: &mut Peekable<I>, kind: Kind) -> Result<Vec<Ast>, SyntaxError>
 where
     I: Iterator<Item = Token>,
 {
@@ -233,80 +251,153 @@ where
                 return Ok(seq);
             }
             Some(_) => seq.push(read_form(tokens)?), // Q. ここでUnexpectedEOFになったらどうする？ A. ならない
-            None => return Err(ParseError::Unclosed(kind.into())),
+            None => return Err(SyntaxError::Unclosed(kind.into())),
         }
     }
 }
 
-fn read_pair_seq<I>(tokens: &mut Peekable<I>, kind: Kind) -> Result<Vec<(Ast, Ast)>, ParseError>
+#[inline]
+fn read_map<I>(tokens: &mut Peekable<I>) -> Result<Vec<(Ast, Ast)>, SyntaxError>
 where
     I: Iterator<Item = Token>,
 {
-    let mut seq = Vec::new();
+    let mut pairs = Vec::new();
     loop {
         match tokens.peek() {
-            Some(&Token::BRACKET(k, State::Close)) if k == kind => {
+            Some(Token::BRACKET(Kind::Curly, State::Close)) => {
                 tokens.next();
-                return Ok(seq);
+                return Ok(pairs);
             }
             Some(_) => {
-                seq.push((
+                pairs.push((
                     read_form(tokens)?,
                     match tokens.peek() {
-                        Some(&Token::BRACKET(k, State::Close)) if k == kind => {
-                            return Err(ParseError::UnbalancedPair);
+                        Some(Token::BRACKET(Kind::Curly, State::Close)) => {
+                            return Err(SyntaxError::OddNumberOfMap);
                         }
                         Some(_) => read_form(tokens)?,
-                        None => return Err(ParseError::Unclosed(kind.into())),
+                        None => return Err(SyntaxError::Unclosed(Enclosure::CurlyBracket)),
                     },
                 ));
             }
-            None => return Err(ParseError::Unclosed(kind.into())),
+            None => return Err(SyntaxError::Unclosed(Enclosure::CurlyBracket)),
         }
     }
 }
 
-// TODO: 特殊形式はそもそもカッコが閉じていることを確認してから処理を行いたい
-
-fn read_special_form<I>(s: Specials, tokens: &mut Peekable<I>) -> Result<SpecialForms, ParseError>
+fn read_special_form<I>(tokens: &mut Peekable<I>, s: Specials) -> Result<SpecialForms, SyntaxError>
 where
     I: Iterator<Item = Token>,
 {
     tokens.next(); // consume special token
+    let seq = read_seq(tokens, Kind::Paren)?;
     Ok(match s {
-        Specials::DEF => {
-            let v = read_seq(tokens, Kind::Paren)?;
-            match v.len().cmp(&2) {
-                Ordering::Less => return Err(ParseError::TooFewArgs(Specials::DEF)),
-                Ordering::Greater => return Err(ParseError::TooManyArgs(Specials::DEF)),
-                Ordering::Equal => {
-                    let [sym, ast] = unsafe { v.try_into().unwrap_unchecked() };
-                    SpecialForms::Def(
-                        if let Ast::Sym(s) = sym {
-                            s
-                        } else {
-                            return Err(ParseError::NotSymbol(WhatMustBeSymbol::DefFirstArg));
-                        },
-                        ast,
-                    )
+        Specials::DEF => parse_binary_special_form(
+            Specials::DEF,
+            |sym, exp| {
+                if let Ast::Sym(s) = sym {
+                    Ok(SpecialForms::Def(s, exp))
+                } else {
+                    Err(SyntaxError::NotSymbol(MustBeSymbol::DefFirstArg))
                 }
+            },
+            seq,
+        )?,
+        Specials::DO => SpecialForms::Do(seq),
+        Specials::IF => match seq.len() {
+            ..=1 => return Err(SyntaxError::TooFewArgs(Specials::IF)),
+            2 => {
+                let [cond, then] = unsafe { seq.try_into().unwrap_unchecked() };
+                SpecialForms::If(cond, then, Ast::Nil)
             }
-        }
-        Specials::DO => SpecialForms::Do(read_seq(tokens, Kind::Paren)?),
-        Specials::IF => {
-            let v = read_seq(tokens, Kind::Paren)?;
-            match v.len().cmp(&3) {
-                Ordering::Less => return Err(ParseError::TooFewArgs(Specials::IF)),
-                Ordering::Greater => return Err(ParseError::TooManyArgs(Specials::IF)),
-                Ordering::Equal => {
-                    let [cond, then, else_] = unsafe { v.try_into().unwrap_unchecked() };
-                    SpecialForms::If(cond, then, else_)
-                }
+            3 => {
+                let [cond, then, else_] = unsafe { seq.try_into().unwrap_unchecked() };
+                SpecialForms::If(cond, then, else_)
             }
-        }
-        Specials::LET => todo!(),
-        Specials::FN => todo!(),
+            4.. => return Err(SyntaxError::TooManyArgs(Specials::IF)),
+        },
+        Specials::LET => parse_binary_special_form(
+            Specials::LET,
+            |bindings, body| {
+                let Ast::Vector(bindings) = bindings else {
+                    return Err(SyntaxError::NotVector(MustBeVector::LetBindings));
+                };
+                Ok(SpecialForms::Let(parse_bindings(bindings)?, body))
+            },
+            seq,
+        )?,
+        Specials::FN => parse_binary_special_form(
+            Specials::FN,
+            |params, body| {
+                let Ast::Vector(params) = params else {
+                    return Err(SyntaxError::NotVector(MustBeVector::FnParams));
+                };
+                let (params, variadic) = parse_params(params)?;
+                Ok(SpecialForms::Fn(params, variadic, body))
+            },
+            seq,
+        )?,
     })
+}
+
+fn parse_binary_special_form<F>(
+    s: Specials,
+    parse_pair: F,
+    args: Vec<Ast>,
+) -> Result<SpecialForms, SyntaxError>
+where
+    F: FnOnce(Ast, Ast) -> Result<SpecialForms, SyntaxError>,
+{
+    match args.len().cmp(&2) {
+        Ordering::Less => Err(SyntaxError::TooFewArgs(s)),
+        Ordering::Equal => Ok({
+            let [a, b] = unsafe { args.try_into().unwrap_unchecked() };
+            parse_pair(a, b)?
+        }),
+        Ordering::Greater => Err(SyntaxError::TooManyArgs(s)),
+    }
+}
+
+#[inline]
+fn parse_bindings(mut v: Vec<Ast>) -> Result<Vec<(Symbol, Ast)>, SyntaxError> {
+    let mut result = Vec::with_capacity(v.len() / 2);
+    while let Some(sym) = v.pop() {
+        if let Ast::Sym(s) = sym {
+            result.push((s, v.pop().ok_or(SyntaxError::OddNumberBindings)?));
+        } else {
+            return Err(SyntaxError::NotSymbol(MustBeSymbol::LetBoundVar));
+        }
+    }
+    Ok(result)
+}
+
+#[inline]
+fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxError> {
+    let (mut rev_params, variadic) = v.rchunks(2).enumerate().try_fold(
+        (Vec::with_capacity(v.len()), None),
+        // NOTE: vを逆順でチェック => [a b c & d] ~> [& d], [b c], [a]
+        |(mut acc, v), (i, chunk)| match chunk {
+            [Ast::Sym(s), Ast::Sym(t)] => match (i, (s.as_str(), t.as_str())) {
+                (_, (_, "&")) | (1.., ("&", _)) => Err(SyntaxError::MisplacedAmpersand),
+                (0, ("&", _)) => Ok((acc, Some(t.clone()))),
+                _ => {
+                    acc.push(t.clone());
+                    acc.push(s.clone());
+                    Ok((acc, v))
+                }
+            },
+            [Ast::Sym(s)] => match s.as_str() {
+                "&" => Err(SyntaxError::MisplacedAmpersand),
+                _ => {
+                    acc.push(s.clone());
+                    Ok((acc, v))
+                }
+            },
+            _ => Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams)),
+        },
+    )?;
+    rev_params.reverse();
+    Ok((rev_params, variadic))
 }
 
 mod special_string {
