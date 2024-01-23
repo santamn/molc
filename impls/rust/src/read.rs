@@ -155,6 +155,7 @@ pub enum SpecialForms {
 pub enum ParseError {
     UnexpectedEOF,
     Unclosed(Enclosure),
+    UnbalancedPair,
     OddNumberOfMap,
     Def(DefError),
     IfTooFewArgs,
@@ -209,28 +210,7 @@ where
             read_seq(tokens, Kind::Square).map(Ast::Vector)
         }
         Token::BRACKET(Kind::Curly, State::Open) => {
-            let mut m = Vec::new();
-            loop {
-                match tokens.peek() {
-                    Some(&Token::BRACKET(Kind::Curly, State::Close)) => {
-                        tokens.next();
-                        return Ok(Ast::Map(m));
-                    }
-                    Some(_) => {
-                        m.push((
-                            read_form(tokens)?,
-                            match read_form(tokens) {
-                                Ok(ast) => ast,
-                                Err(ParseError::UnexpectedEOF) => {
-                                    return Err(ParseError::OddNumberOfMap)
-                                }
-                                Err(e) => return Err(e),
-                            },
-                        ));
-                    }
-                    None => return Err(ParseError::Unclosed(Enclosure::CurlyBracket)),
-                }
-            }
+            read_pair_seq(tokens, Kind::Curly).map(Ast::Map)
         }
         Token::MACRO(_c) => todo!("impl read_macro"),
         Token::SPECIAL(_) => todo!("エラー処理"),
@@ -250,6 +230,31 @@ where
                 return Ok(seq);
             }
             Some(_) => seq.push(read_form(tokens)?), // Q. ここでUnexpectedEOFになったらどうする？ A. ならない
+            None => return Err(ParseError::Unclosed(kind.into())),
+        }
+    }
+}
+
+fn read_pair_seq<I>(tokens: &mut Peekable<I>, kind: Kind) -> Result<Vec<(Ast, Ast)>, ParseError>
+where
+    I: Iterator<Item = Token>,
+{
+    let mut seq = Vec::new();
+    loop {
+        match tokens.peek() {
+            Some(&Token::BRACKET(k, State::Close)) if k == kind => {
+                tokens.next();
+                return Ok(seq);
+            }
+            Some(_) => {
+                seq.push((
+                    read_form(tokens)?,
+                    read_form(tokens).map_err(|e| match e {
+                        ParseError::UnexpectedEOF => ParseError::UnbalancedPair,
+                        _ => e,
+                    })?,
+                ));
+            }
             None => return Err(ParseError::Unclosed(kind.into())),
         }
     }
