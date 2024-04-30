@@ -372,13 +372,14 @@ fn parse_bindings(mut v: Vec<Ast>) -> Result<Vec<(Symbol, Ast)>, SyntaxError> {
 
 #[inline]
 fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxError> {
+    const AMPERSAND: &str = "&";
     let (mut rev_params, variadic) = v.rchunks(2).enumerate().try_fold(
         (Vec::with_capacity(v.len()), None),
         // NOTE: vを逆順でチェック => [a b c & d] ~> [& d], [b c], [a]
         |(mut acc, v), (i, chunk)| match chunk {
             [Ast::Sym(s), Ast::Sym(t)] => match (i, (s.as_str(), t.as_str())) {
-                (_, (_, "&")) | (1.., ("&", _)) => Err(SyntaxError::MisplacedAmpersand),
-                (0, ("&", _)) => Ok((acc, Some(t.clone()))),
+                (_, (_, AMPERSAND)) | (1.., (AMPERSAND, _)) => Err(SyntaxError::MisplacedAmpersand),
+                (0, (AMPERSAND, _)) => Ok((acc, Some(t.clone()))),
                 _ => {
                     acc.push(t.clone());
                     acc.push(s.clone());
@@ -386,7 +387,7 @@ fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxErro
                 }
             },
             [Ast::Sym(s)] => match s.as_str() {
-                "&" => Err(SyntaxError::MisplacedAmpersand),
+                AMPERSAND => Err(SyntaxError::MisplacedAmpersand),
                 _ => {
                     acc.push(s.clone());
                     Ok((acc, v))
