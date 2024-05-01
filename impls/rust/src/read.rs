@@ -373,31 +373,37 @@ fn parse_bindings(mut v: Vec<Ast>) -> Result<Vec<(Symbol, Ast)>, SyntaxError> {
 #[inline]
 fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxError> {
     const AMPERSAND: &str = "&";
-    let (mut rev_params, variadic) = v.rchunks(2).enumerate().try_fold(
-        (Vec::with_capacity(v.len()), None),
-        // NOTE: vを逆順でチェック => [a b c & d] ~> [& d], [b c], [a]
-        |(mut acc, v), (i, chunk)| match chunk {
-            [Ast::Sym(s), Ast::Sym(t)] => match (i, (s.as_str(), t.as_str())) {
-                (_, (_, AMPERSAND)) | (1.., (AMPERSAND, _)) => Err(SyntaxError::MisplacedAmpersand),
-                (0, (AMPERSAND, _)) => Ok((acc, Some(t.clone()))),
-                _ => {
-                    acc.push(t.clone());
-                    acc.push(s.clone());
-                    Ok((acc, v))
+    let n = v.len();
+    let mut params: Vec<Symbol> = v[..n - 2]
+        .iter()
+        .map(|ast| {
+            if let Ast::Sym(s) = ast {
+                if s.as_str() == AMPERSAND {
+                    Err(SyntaxError::MisplacedAmpersand)
+                } else {
+                    Ok(s.clone())
                 }
-            },
-            [Ast::Sym(s)] => match s.as_str() {
-                AMPERSAND => Err(SyntaxError::MisplacedAmpersand),
-                _ => {
-                    acc.push(s.clone());
-                    Ok((acc, v))
-                }
-            },
-            _ => Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams)),
-        },
-    )?;
-    rev_params.reverse();
-    Ok((rev_params, variadic))
+            } else {
+                Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+            }
+        })
+        .try_collect()?;
+
+    if let [Ast::Sym(s), Ast::Sym(t)] = &v[n - 2..] {
+        match (s.as_str(), t.as_str()) {
+            (_, AMPERSAND) => Err(SyntaxError::MisplacedAmpersand),
+            (AMPERSAND, _) => Ok((params, Some(t.clone()))),
+            _ => Ok((
+                {
+                    params.extend([s, t].into_iter().cloned());
+                    params
+                },
+                None,
+            )),
+        }
+    } else {
+        Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+    }
 }
 
 mod special_string {
