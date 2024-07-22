@@ -374,36 +374,59 @@ fn parse_bindings(mut v: Vec<Ast>) -> Result<Vec<(Symbol, Ast)>, SyntaxError> {
 fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxError> {
     const AMPERSAND: &str = "&";
     let n = v.len();
-    // TODO: n<=2の場合のエラー処理
-    let mut params: Vec<Symbol> = v[..n - 2]
-        .iter()
-        .map(|ast| {
-            if let Ast::Sym(s) = ast {
-                if s.as_str() == AMPERSAND {
-                    Err(SyntaxError::MisplacedAmpersand)
-                } else {
-                    Ok(s.clone())
+
+    match n {
+        0 => Ok((Vec::new(), None)),
+        1 => {
+            if let Ast::Sym(s) = &v[0] {
+                Ok((vec![s.clone()], None))
+            } else {
+                Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+            }
+        }
+        2 => {
+            if let [Ast::Sym(s), Ast::Sym(t)] = &v[..] {
+                match (s.as_str(), t.as_str()) {
+                    (_, AMPERSAND) => Err(SyntaxError::MisplacedAmpersand),
+                    (AMPERSAND, _) => Ok((Vec::new(), Some(t.clone()))),
+                    _ => Ok((vec![s.clone(), t.clone()], None)),
                 }
             } else {
                 Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
             }
-        })
-        .try_collect()?;
-
-    if let [Ast::Sym(s), Ast::Sym(t)] = &v[n - 2..] {
-        match (s.as_str(), t.as_str()) {
-            (_, AMPERSAND) => Err(SyntaxError::MisplacedAmpersand),
-            (AMPERSAND, _) => Ok((params, Some(t.clone()))),
-            _ => Ok((
-                {
-                    params.extend([s, t].into_iter().cloned());
-                    params
-                },
-                None,
-            )),
         }
-    } else {
-        Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+        _ => {
+            let mut params: Vec<Symbol> = v[..n - 2]
+                .iter()
+                .map(|ast| {
+                    if let Ast::Sym(s) = ast {
+                        if s.as_str() == AMPERSAND {
+                            Err(SyntaxError::MisplacedAmpersand)
+                        } else {
+                            Ok(s.clone())
+                        }
+                    } else {
+                        Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+                    }
+                })
+                .try_collect()?;
+
+            if let [Ast::Sym(s), Ast::Sym(t)] = &v[n - 2..] {
+                match (s.as_str(), t.as_str()) {
+                    (_, AMPERSAND) => Err(SyntaxError::MisplacedAmpersand),
+                    (AMPERSAND, _) => Ok((params, Some(t.clone()))),
+                    _ => Ok((
+                        {
+                            params.extend([s, t].into_iter().cloned());
+                            params
+                        },
+                        None,
+                    )),
+                }
+            } else {
+                Err(SyntaxError::NotSymbol(MustBeSymbol::FnParams))
+            }
+        }
     }
 }
 
