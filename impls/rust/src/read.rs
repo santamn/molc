@@ -374,6 +374,7 @@ fn parse_bindings(mut v: Vec<Ast>) -> Result<Vec<(Symbol, Ast)>, SyntaxError> {
 fn parse_params(v: Vec<Ast>) -> Result<(Vec<Symbol>, Option<Symbol>), SyntaxError> {
     const AMPERSAND: &str = "&";
     let n = v.len();
+    // TODO: n<=2の場合のエラー処理
     let mut params: Vec<Symbol> = v[..n - 2]
         .iter()
         .map(|ast| {
